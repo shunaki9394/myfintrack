@@ -363,3 +363,190 @@ function get_loans_with_stats(PDO $pdo): array
 
     return $loans;
 }
+
+// ---------------------------------------------------------------------
+// Credit card installment plans
+// ---------------------------------------------------------------------
+
+/**
+ * Returns only credit card accounts (type = 'credit_card').
+ */
+function get_credit_card_accounts(PDO $pdo): array
+{
+    $stmt = $pdo->prepare("SELECT * FROM accounts WHERE type = 'credit_card' ORDER BY name");
+    $stmt->execute();
+    return $stmt->fetchAll();
+}
+
+/**
+ * Get all installment plans with computed stats:
+ *  - months_elapsed
+ *  - remaining_count (instalments left)
+ *  - progress_pct
+ *  - next_due_date
+ *  - status (Active / Completed)
+ */
+function get_installment_plans_with_stats(PDO $pdo): array
+{
+    $sql = "
+      SELECT
+        i.*,
+        a.name AS account_name,
+        a.type AS account_type
+      FROM installment_plans i
+      JOIN accounts a ON i.account_id = a.id
+      ORDER BY i.start_date, i.id
+    ";
+    $stmt = $pdo->query($sql);
+
+    $plans = [];
+    $today = date('Y-m-d');
+
+    foreach ($stmt as $row) {
+        $termMonths     = (int)$row['term_months'];
+        $monthlyPayment = (float)$row['monthly_payment'];
+        $startDate      = $row['start_date'];
+
+        $monthsElapsed = months_between_dates($startDate, $today);
+        if ($monthsElapsed < 0) {
+            $monthsElapsed = 0;
+        }
+        if ($termMonths > 0) {
+            $monthsElapsed = min($monthsElapsed, $termMonths);
+        }
+
+        // If closed_at is set, treat as fully paid.
+        if (!empty($row['closed_at'])) {
+            $monthsElapsed = $termMonths;
+        }
+
+        $paidCount      = $monthsElapsed;
+        $remainingCount = max($termMonths - $paidCount, 0);
+        $progressPct    = $termMonths > 0 ? ($paidCount / $termMonths * 100.0) : null;
+
+        $dueDay = $row['due_day'] !== null ? (int)$row['due_day'] : null;
+        $nextDueDate = compute_next_due_date($dueDay, $today);
+
+        $status = 'Active';
+        $statusClass = 'pill-warning';
+
+        if ($remainingCount <= 0) {
+            $status = 'Completed';
+            $statusClass = 'pill-positive';
+        } else {
+            // We are not tracking actual payment vs expected here, so just mark as Active.
+            $status = 'Active';
+            $statusClass = 'pill-positive';
+        }
+
+        $plans[] = [
+            'id'              => (int)$row['id'],
+            'title'           => $row['title'],
+            'merchant'        => $row['merchant'],
+            'original_amount' => (float)$row['original_amount'],
+            'term_months'     => $termMonths,
+            'monthly_payment' => $monthlyPayment,
+            'start_date'      => $startDate,
+            'due_day'         => $row['due_day'],
+            'next_due_date'   => $nextDueDate,
+            'closed_at'       => $row['closed_at'],
+            'notes'           => $row['notes'],
+            'account_id'      => (int)$row['account_id'],
+            'account_name'    => $row['account_name'],
+            'account_type'    => $row['account_type'],
+            'months_elapsed'  => $monthsElapsed,
+            'remaining_count' => $remainingCount,
+            'progress_pct'    => $progressPct,
+            'status'          => $status,
+            'status_class'    => $statusClass,
+        ];
+    }
+
+    return $plans;
+}
+
+/**
+ * Summary for dashboard: loans only.
+ * Active loans = those with outstanding > small tolerance.
+ */
+function get_loan_summary(PDO $pdo): array
+{
+    $loans = get_loans_with_stats($pdo);
+
+    $today          = new DateTimeImmutable('today');
+    $thirtyDaysAhead = $today->modify('+30 days');
+
+    $activeCount = 0;
+    $monthlyTotal = 0.0;
+    $dueSoonCount = 0;
+
+    foreach ($loans as $loan) {
+        if ($loan['outstanding'] <= 1) {
+            continue; // treated as completed
+        }
+
+        $activeCount++;
+
+        if (!empty($loan['monthly_payment'])) {
+            $monthlyTotal += (float)$loan['monthly_payment'];
+        }
+
+        if (!empty($loan['next_due_date'])) {
+            try {
+                $nd = new DateTimeImmutable($loan['next_due_date']);
+                if ($nd >= $today && $nd <= $thirtyDaysAhead) {
+                    $dueSoonCount++;
+                }
+            } catch (Exception $e) {
+                // ignore invalid date
+            }
+        }
+    }
+
+    return [
+        'active_count'  => $activeCount,
+        'monthly_total' => $monthlyTotal,
+        'due_soon_count'=> $dueSoonCount,
+    ];
+}
+
+/**
+ * Summary for dashboard: credit card installment plans only.
+ */
+function get_installment_summary(PDO $pdo): array
+{
+    $plans = get_installment_plans_with_stats($pdo);
+
+    $today          = new DateTimeImmutable('today');
+    $thirtyDaysAhead = $today->modify('+30 days');
+
+    $activeCount = 0;
+    $monthlyTotal = 0.0;
+    $dueSoonCount = 0;
+
+    foreach ($plans as $p) {
+        if ($p['status'] === 'Completed') {
+            continue;
+        }
+
+        $activeCount++;
+        $monthlyTotal += (float)$p['monthly_payment'];
+
+        if (!empty($p['next_due_date'])) {
+            try {
+                $nd = new DateTimeImmutable($p['next_due_date']);
+                if ($nd >= $today && $nd <= $thirtyDaysAhead) {
+                    $dueSoonCount++;
+                }
+            } catch (Exception $e) {
+                // ignore
+            }
+        }
+    }
+
+    return [
+        'active_count'   => $activeCount,
+        'monthly_total'  => $monthlyTotal,
+        'due_soon_count' => $dueSoonCount,
+    ];
+}

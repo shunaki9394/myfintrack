@@ -8,6 +8,10 @@ $monthOptions = get_month_options(12);
 
 // History for last 6 months
 $historyMonths = get_month_options(6);
+
+// New: loan + installment summaries
+$loanSummary = get_loan_summary($pdo);
+$instSummary = get_installment_summary($pdo);
 ?>
 <!doctype html>
 <html lang="en">
@@ -16,7 +20,6 @@ $historyMonths = get_month_options(6);
     <title>Financial Health Dashboard</title>
     <link rel="stylesheet"
           href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
-    <!-- IMPORTANT: make sure this file exists in same folder -->
     <link rel="stylesheet" href="styles.css?v=1">
 </head>
 <body>
@@ -52,6 +55,10 @@ $historyMonths = get_month_options(6);
             <a href="loans.php">
                 <span class="status-dot"></span>
                 <span>Loans</span>
+            </a>
+            <a href="installments.php">
+                <span class="status-dot"></span>
+                <span>Installments</span>
             </a>
         </nav>
 
@@ -157,7 +164,7 @@ $historyMonths = get_month_options(6);
                 </div>
             </div>
 
-            <!-- Summary grid -->
+            <!-- Ratios + accounts -->
             <div class="summary-grid">
                 <div class="summary-card">
                     <div class="summary-header">
@@ -261,6 +268,62 @@ $historyMonths = get_month_options(6);
                                 </span>
                             </div>
                         <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Debt snapshot -->
+            <h2 class="h6 mt-4 mb-2">Debt snapshot</h2>
+            <div class="summary-grid">
+                <div class="summary-card">
+                    <div class="summary-title">Loans</div>
+                    <div class="summary-subtitle">
+                        Fixed-term bank / personal / car loans.
+                    </div>
+                    <div class="mt-2 small">
+                        <div>
+                            Active loans:
+                            <strong><?= (int)$loanSummary['active_count'] ?></strong>
+                        </div>
+                        <div>
+                            Monthly instalments:
+                            <strong><?= format_money($loanSummary['monthly_total']) ?></strong>
+                        </div>
+                        <div>
+                            Due in next 30 days:
+                            <strong><?= (int)$loanSummary['due_soon_count'] ?></strong>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <a href="loans.php" class="btn btn-sm btn-outline-secondary rounded-pill">
+                            View loans
+                        </a>
+                    </div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-title">Card installments</div>
+                    <div class="summary-subtitle">
+                        Instalment purchases on credit cards.
+                    </div>
+                    <div class="mt-2 small">
+                        <div>
+                            Active plans:
+                            <strong><?= (int)$instSummary['active_count'] ?></strong>
+                        </div>
+                        <div>
+                            Monthly instalments:
+                            <strong><?= format_money($instSummary['monthly_total']) ?></strong>
+                        </div>
+                        <div>
+                            Due in next 30 days:
+                            <strong><?= (int)$instSummary['due_soon_count'] ?></strong>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <a href="installments.php" class="btn btn-sm btn-outline-secondary rounded-pill">
+                            View installments
+                        </a>
                     </div>
                 </div>
             </div>
