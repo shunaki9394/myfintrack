@@ -1,182 +1,132 @@
 <?php
-require_once 'config.php';
-require_once 'functions.php';
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/layout.php';
 
-$month = isset($_GET['month']) ? $_GET['month'] : get_default_month();
-[$year, $m] = parse_year_month($month);
-$start = sprintf('%04d-%02d-01', $year, $m);
-$startDt = new DateTime($start);
-$endDt = clone $startDt;
-$endDt->modify('last day of this month');
-$end = $endDt->format('Y-m-d');
+$selectedMonth = normalize_month($_GET['month'] ?? date('Y-m'));
+[$start, $end] = get_month_start_end($selectedMonth);
+$monthLabel    = date('F Y', strtotime($selectedMonth . '-01'));
 
-$sql = "
-  SELECT
-    t.*,
-    fa.name AS from_account_name,
-    ta.name AS to_account_name,
-    c.name AS category_name,
-    c.kind AS category_kind
-  FROM transactions t
-  LEFT JOIN accounts fa ON t.from_account_id = fa.id
-  LEFT JOIN accounts ta ON t.to_account_id = ta.id
-  LEFT JOIN categories c ON t.category_id = c.id
-  WHERE t.deleted_at IS NULL
-    AND t.booked_at BETWEEN :start AND :end
-  ORDER BY t.booked_at DESC, t.id DESC
-  LIMIT 200
-";
-$stmt = $pdo->prepare($sql);
-$stmt->execute(['start' => $start, 'end' => $end]);
-$transactions = $stmt->fetchAll();
+$message = null;
+$error   = null;
+
+// Handle soft delete
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_id'])) {
+    $id = (int)$_POST['delete_id'];
+
+    try {
+        $stmt = $pdo->prepare("UPDATE transactions SET deleted_at = NOW() WHERE id = :id");
+        $stmt->execute([':id' => $id]);
+        $message = 'Transaction deleted.';
+    } catch (Throwable $e) {
+        $error = 'Failed to delete transaction: ' . $e->getMessage();
+    }
+}
+
+// Load transactions for the month
+$stmt = $pdo->prepare(
+    "SELECT
+         t.*,
+         fa.name AS from_account_name,
+         ta.name AS to_account_name,
+         c.name  AS category_name,
+         c.kind  AS category_kind
+     FROM transactions t
+     LEFT JOIN accounts   fa ON t.from_account_id = fa.id
+     LEFT JOIN accounts   ta ON t.to_account_id   = ta.id
+     LEFT JOIN categories c  ON t.category_id     = c.id
+     WHERE t.booked_at BETWEEN :s AND :e
+       AND (t.deleted_at IS NULL OR t.deleted_at = '0000-00-00 00:00:00')
+     ORDER BY t.booked_at DESC, t.id DESC
+     LIMIT 200"
+);
+$stmt->execute([':s' => $start, ':e' => $end]);
+$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $monthOptions = get_month_options(12);
+
+render_layout_start('Transactions', 'transactions');
 ?>
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <title>Transactions</title>
-    <link rel="stylesheet"
-          href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="styles.css?v=1">
-</head>
-<body>
-<div class="app-shell">
 
-    <aside class="sidebar">
-        <div class="sidebar-header">
-            <div class="sidebar-logo">FH</div>
-            <div class="sidebar-title">
-                <span>Finance Desk</span>
-                <span>Personal health monitor</span>
-            </div>
-        </div>
+<div class="page-header">
+    <div>
+        <h1>Transactions</h1>
+        <p>All income, expenses and transfers. This drives your dashboard.</p>
+    </div>
 
-        <nav class="sidebar-nav">
-            <a href="index.php">
-                <span class="status-dot"></span>
-                <span>Dashboard</span>
-            </a>
-            <a href="transactions.php" class="active">
-                <span class="status-dot"></span>
-                <span>Transactions</span>
-            </a>
-            <a href="accounts.php">
-                <span class="status-dot"></span>
-                <span>Accounts</span>
-            </a>
-            <a href="categories.php">
-                <span class="status-dot"></span>
-                <span>Categories</span>
-            </a>
-            <a href="loans.php">
-                <span class="status-dot"></span>
-                <span>Loans</span>
-            </a>
-        </nav>
+    <div class="page-header-actions">
+        <form method="get" class="month-selector">
+            <label>
+                Month
+                <select name="month" onchange="this.form.submit()">
+                    <?php foreach ($monthOptions as $opt): ?>
+                        <option value="<?= h($opt['value']) ?>"
+                            <?= $opt['value'] === $selectedMonth ? 'selected' : '' ?>>
+                            <?= h($opt['label']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <button type="submit" class="btn-secondary">Apply</button>
+        </form>
 
-        <div class="sidebar-footer">
-            <div class="sidebar-footer-label">
-                <span>Environment</span>
-                <span class="sidebar-footer-pill">Preview</span>
-            </div>
-            <div>
-                Every lunch, bill and transfer goes here.  
-                Dashboard pulls its numbers from this list.
-            </div>
-        </div>
-    </aside>
-
-    <main class="main">
-        <header class="topbar">
-            <div class="topbar-left">
-                <div class="breadcrumb-row">
-                    <span class="breadcrumb-pill">Personal</span>
-                    <span>Transactions</span>
-                </div>
-                <div class="topbar-title">Transactions</div>
-                <div class="topbar-subtitle">
-                    Showing entries for <?= $startDt->format('F Y') ?>.
-                </div>
-            </div>
-            <div class="topbar-right">
-                <form method="get" class="d-flex align-items-center gap-2">
-                    <label class="small text-muted">Month</label>
-                    <select name="month" class="form-select form-select-sm">
-                        <?php foreach ($monthOptions as $opt): ?>
-                            <option value="<?= htmlspecialchars($opt['value']) ?>"
-                                <?= $opt['value'] === $month ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($opt['label']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <button class="btn-primary-cta btn-sm" type="submit">Apply</button>
-                </form>
-                <a href="transaction_form.php" class="btn-primary-cta ms-2">+ New transaction</a>
-            </div>
-        </header>
-
-        <div class="main-content">
-            <div class="summary-card">
-                <div class="summary-header">
-                    <div>
-                        <div class="summary-title">Transaction list</div>
-                        <div class="summary-subtitle">Latest 200 entries in this month.</div>
-                    </div>
-                </div>
-
-                <div class="table-wrapper">
-                    <table class="table table-light-sm mb-0">
-                        <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Type</th>
-                            <th class="text-end">Amount</th>
-                            <th>From</th>
-                            <th>To</th>
-                            <th>Category</th>
-                            <th>Description</th>
-                            <th class="text-end">Actions</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($transactions as $t): ?>
-                            <tr>
-                                <td><?= htmlspecialchars($t['booked_at']) ?></td>
-                                <td><?= htmlspecialchars(ucfirst($t['type'])) ?></td>
-                                <td class="text-end"><?= number_format($t['amount'], 2) ?></td>
-                                <td><?= htmlspecialchars($t['from_account_name'] ?? '') ?></td>
-                                <td><?= htmlspecialchars($t['to_account_name'] ?? '') ?></td>
-                                <td><?= htmlspecialchars($t['category_name'] ?? '') ?></td>
-                                <td><?= htmlspecialchars($t['description'] ?? '') ?></td>
-                                <td class="text-end">
-                                    <a href="transaction_form.php?id=<?= (int)$t['id'] ?>"
-                                       class="btn btn-sm btn-outline-secondary rounded-pill me-1">
-                                        Edit
-                                    </a>
-                                    <a href="transaction_delete.php?id=<?= (int)$t['id'] ?>"
-                                       class="btn btn-sm btn-outline-danger rounded-pill"
-                                       onclick="return confirm('Delete this transaction?');">
-                                        Delete
-                                    </a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        <?php if (!$transactions): ?>
-                            <tr>
-                                <td colspan="8" class="text-center text-muted">
-                                    No transactions for this month yet.
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
-
-            </div>
-        </div>
-    </main>
+        <a href="transaction_form.php" class="btn-primary">Add transaction</a>
+    </div>
 </div>
-</body>
-</html>
+
+<?php if ($message): ?>
+    <div class="alert alert-success"><?= h($message) ?></div>
+<?php endif; ?>
+<?php if ($error): ?>
+    <div class="alert alert-error"><?= h($error) ?></div>
+<?php endif; ?>
+
+<section class="card card-full">
+    <h3><?= h($monthLabel) ?> transactions</h3>
+
+    <?php if (empty($rows)): ?>
+        <p>No transactions recorded for this month yet.</p>
+    <?php else: ?>
+        <table class="data-table">
+            <thead>
+            <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Category</th>
+                <th>Description</th>
+                <th style="text-align:right;">Amount (RM)</th>
+                <th style="width:1%;">Actions</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($rows as $tx): ?>
+                <tr>
+                    <td><?= h($tx['booked_at']) ?></td>
+                    <td><?= h(ucfirst($tx['type'])) ?></td>
+                    <td><?= h($tx['from_account_name'] ?? '') ?></td>
+                    <td><?= h($tx['to_account_name'] ?? '') ?></td>
+                    <td><?= h($tx['category_name'] ?? '') ?></td>
+                    <td><?= h($tx['description'] ?? '') ?></td>
+                    <td style="text-align:right;">
+                        <?= number_format((float)$tx['amount'], 2) ?>
+                    </td>
+                    <td>
+                        <div class="table-actions">
+                            <a href="transaction_form.php?id=<?= (int)$tx['id'] ?>">Edit</a>
+                            <form method="post" onsubmit="return confirm('Delete this transaction?');">
+                                <input type="hidden" name="delete_id" value="<?= (int)$tx['id'] ?>">
+                                <button type="submit" class="link-danger">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    <?php endif; ?>
+</section>
+
+<?php
+render_layout_end();
