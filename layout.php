@@ -163,7 +163,7 @@ function render_layout_end(): void
     </html>
     <?php
 }
-=======
+
 <?php
 // layout.php
 // Shared page shell: sidebar + main content + table filters/sorting.
